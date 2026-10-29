@@ -1,0 +1,102 @@
+---
+title: "Monitoreo de oxígeno y temperatura"
+format:
+  dashboard:
+    embed-resources: true
+---
+
+```{r}
+#| include: false
+source("R/leer_datos.R")
+library(plotly)
+library(crosstalk)
+
+# Función que promedia los datos de 5 min a la escala que se le indique
+promediar <- function(unidad, nombre, formato) {
+  datos |>
+    mutate(fecha = floor_date(fecha, unidad)) |>
+    group_by(Sector, Tipo, Profundidad, fecha) |>
+    summarise(oxigeno = mean(oxigeno, na.rm = TRUE),
+              temp    = mean(temp, na.rm = TRUE),
+              .groups = "drop") |>
+    # Rellenar los periodos sin datos con NA, para que la línea se corte
+    group_by(Sector, Tipo, Profundidad) |>
+    complete(fecha = seq(min(fecha), max(fecha), by = unidad)) |>
+    ungroup() |>
+        mutate(escala    = nombre,
+           fecha_txt = format(fecha, formato)) |>
+    arrange(Sector, Tipo, fecha)
+}
+
+datos_largo <- bind_rows(
+  promediar("hour",  "Hora", "%d-%m-%Y %H:%M"),
+  promediar("day",   "Día",  "%d-%m-%Y"),
+  promediar("month", "Mes",  "%m-%Y")
+) |>
+  mutate(escala   = factor(escala, levels = c("Hora", "Día", "Mes")),
+         etiqueta = paste0(Sector, " – ", Tipo, " (", Profundidad, " m)"))
+
+sd <- SharedData$new(datos_largo, group = "sensores")
+```
+
+# {.sidebar}
+
+**Filtros**
+
+```{r}
+filter_select("f_escala", "Promedio", sd, ~ escala, multiple = FALSE)
+filter_checkbox("f_sector", "Sector", sd, ~ Sector)
+filter_checkbox("f_tipo", "Profundidad", sd, ~ Tipo)
+```
+
+```{=html}
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    // Esperar a que el menú "Promedio" esté listo
+    var intento = setInterval(function () {
+      var sel = document.querySelector("#f_escala select");
+      if (!sel || !sel.selectize) return;
+      clearInterval(intento);
+      var s = sel.selectize;
+
+      // 1. Quitar la opción "(All)"
+      Object.keys(s.options).forEach(function (k) {
+        var texto = s.options[k][s.settings.labelField];
+        if (k === "" || texto === "(All)") s.removeOption(k);
+      });
+
+      // 2. Mostrar "Día" por defecto
+      s.setValue("Día", false);
+
+      // 3. Si alguien borra la selección, volver a "Día"
+      s.on("change", function (v) {
+        if (!v) s.setValue("Día", false);
+      });
+    }, 100);
+  });
+</script>
+```
+
+# Oxígeno
+
+```{r}
+#| title: "Oxígeno disuelto (mg/L)"
+plot_ly(sd, x = ~ fecha, y = ~ oxigeno, color = ~ etiqueta, text = ~ fecha_txt,
+        type = "scatter", mode = "lines", line = list(width = 1),
+        hovertemplate = "%{text}<br>%{y:.2f} mg/L") |>
+  layout(xaxis = list(title = ""),
+         yaxis = list(title = "mg/L", fixedrange = TRUE),
+         legend = list(orientation = "h", x = 0, y = 1.1))
+```
+
+# Temperatura
+
+```{r}
+#| title: "Temperatura (°C)"
+plot_ly(sd, x = ~ fecha, y = ~ temp, color = ~ etiqueta, text = ~ fecha_txt,
+        type = "scatter", mode = "lines", line = list(width = 1),
+        hovertemplate = "%{text}<br>%{y:.2f} °C") |>
+  layout(xaxis = list(title = ""),
+         yaxis = list(title = "°C", fixedrange = TRUE),
+         legend = list(orientation = "h", x = 0, y = 1.1))
+```
