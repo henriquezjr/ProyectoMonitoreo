@@ -1,5 +1,5 @@
 ---
-title: "Monitoreo de oxígeno y temperatura"
+title: "Monitoreo ambiental"
 format:
   dashboard:
     embed-resources: true
@@ -11,32 +11,46 @@ source("R/leer_datos.R")
 library(plotly)
 library(crosstalk)
 
-# Función que promedia los datos de 5 min a la escala que se le indique
+vars <- c("temp", "sal", "oxigeno")
+
+# Promedia los datos de 20 min a la escala que se le indique
 promediar <- function(unidad, nombre, formato) {
   datos |>
     mutate(fecha = floor_date(fecha, unidad)) |>
-    group_by(Sector, Tipo, Profundidad, fecha) |>
-    summarise(oxigeno = mean(oxigeno, na.rm = TRUE),
-              temp    = mean(temp, na.rm = TRUE),
-              .groups = "drop") |>
-    # Rellenar los periodos sin datos con NA, para que la línea se corte
-    group_by(Sector, Tipo, Profundidad) |>
+    group_by(Sector, fecha) |>
+    summarise(across(all_of(vars), \(x) mean(x, na.rm = TRUE)), .groups = "drop") |>
+    # Rellenar los periodos sin datos con NA (por sector), para que la línea se corte
+    group_by(Sector) |>
     complete(fecha = seq(min(fecha), max(fecha), by = unidad)) |>
     ungroup() |>
-        mutate(escala    = nombre,
+    mutate(across(all_of(vars), \(x) ifelse(is.nan(x), NA, x)),
+           escala    = nombre,
            fecha_txt = format(fecha, formato)) |>
-    arrange(Sector, Tipo, fecha)
+    arrange(Sector, fecha)
 }
 
 datos_largo <- bind_rows(
-  promediar("hour",  "Hora", "%d-%m-%Y %H:%M"),
-  promediar("day",   "Día",  "%d-%m-%Y"),
-  promediar("month", "Mes",  "%m-%Y")
+  promediar("hour", "Hora", "%d-%m-%Y %H:%M"),
+  promediar("day",  "Día",  "%d-%m-%Y")
 ) |>
-  mutate(escala   = factor(escala, levels = c("Hora", "Día", "Mes")),
-         etiqueta = paste0(Sector, " – ", Tipo, " (", Profundidad, " m)"))
+  mutate(escala = factor(escala, levels = c("Hora", "Día")))
 
 sd <- SharedData$new(datos_largo, group = "sensores")
+
+# Último registro de cada sector (para la barra lateral)
+ultimos <- datos |>
+  group_by(Sector) |>
+  summarise(ultimo = max(fecha), .groups = "drop")
+
+# Gráfico de una variable, una línea por sector (todas las pestañas usan la misma función)
+graficar <- function(var, unidad) {
+  plot_ly(sd, x = ~ fecha, y = as.formula(paste("~", var)), color = ~ Sector,
+          text = ~ fecha_txt, type = "scatter", mode = "lines", line = list(width = 1.5),
+          hovertemplate = paste0("%{text}<br>%{y:.2f} ", unidad)) |>
+    layout(xaxis = list(title = ""),
+           yaxis = list(title = unidad, fixedrange = TRUE),
+           legend = list(orientation = "h", x = 0, y = 1.1))
+}
 ```
 
 # {.sidebar}
@@ -46,7 +60,14 @@ sd <- SharedData$new(datos_largo, group = "sensores")
 ```{r}
 filter_select("f_escala", "Promedio", sd, ~ escala, multiple = FALSE)
 filter_checkbox("f_sector", "Sector", sd, ~ Sector)
-filter_checkbox("f_tipo", "Profundidad", sd, ~ Tipo)
+```
+
+**Último registro**
+
+```{r}
+#| output: asis
+cat(paste0("- ", ultimos$Sector, ": ", format(ultimos$ultimo, "%d-%m-%Y %H:%M"),
+           collapse = "\n"))
 ```
 
 ```{=html}
@@ -81,22 +102,19 @@ filter_checkbox("f_tipo", "Profundidad", sd, ~ Tipo)
 
 ```{r}
 #| title: "Oxígeno disuelto (mg/L)"
-plot_ly(sd, x = ~ fecha, y = ~ oxigeno, color = ~ etiqueta, text = ~ fecha_txt,
-        type = "scatter", mode = "lines", line = list(width = 1),
-        hovertemplate = "%{text}<br>%{y:.2f} mg/L") |>
-  layout(xaxis = list(title = ""),
-         yaxis = list(title = "mg/L", fixedrange = TRUE),
-         legend = list(orientation = "h", x = 0, y = 1.1))
+graficar("oxigeno", "mg/L")
 ```
 
 # Temperatura
 
 ```{r}
 #| title: "Temperatura (°C)"
-plot_ly(sd, x = ~ fecha, y = ~ temp, color = ~ etiqueta, text = ~ fecha_txt,
-        type = "scatter", mode = "lines", line = list(width = 1),
-        hovertemplate = "%{text}<br>%{y:.2f} °C") |>
-  layout(xaxis = list(title = ""),
-         yaxis = list(title = "°C", fixedrange = TRUE),
-         legend = list(orientation = "h", x = 0, y = 1.1))
+graficar("temp", "°C")
+```
+
+# Salinidad
+
+```{r}
+#| title: "Salinidad (PSU)"
+graficar("sal", "PSU")
 ```
