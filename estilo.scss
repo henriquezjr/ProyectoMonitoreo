@@ -1,0 +1,28 @@
+/*-- scss:defaults --*/
+// Colores y letra tomados de la página de Valentina
+$body-bg: #f1f6f8;
+$body-color: #0e3b52;
+$primary: #0e3b52;
+$navbar-bg: #0e3b52;
+$navbar-fg: #ffffff;
+$font-family-sans-serif: "Segoe UI", system-ui, sans-serif;
+
+/*-- scss:rules --*/
+// Título del dashboard con letra Fraunces
+.navbar-title {
+  font-family: Fraunces, Georgia, serif;
+  font-weight: 600;
+}
+
+// Recuadros de los gráficos: blancos, bordes redondeados y sombra suave
+.card {
+  background: #ffffff;
+  border: 1px solid #d5e2e8;
+  border-radius: 16px;
+  box-shadow: 0 6px 18px rgba(14, 59, 82, 0.07);
+}
+
+// Texto secundario de la barra lateral
+.sidebar {
+  color: #4d6673;
+}

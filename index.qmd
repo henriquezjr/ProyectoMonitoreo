@@ -3,6 +3,10 @@ title: "Monitoreo ambiental"
 format:
   dashboard:
     embed-resources: true
+    theme: [cosmo, estilo.scss]
+    include-in-header:
+      text: |
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&display=swap">
 ---
 
 ```{r}
@@ -10,6 +14,9 @@ format:
 source("R/leer_datos.R")
 library(plotly)
 library(crosstalk)
+library(leaflet)
+library(htmlwidgets)
+library(jsonlite)
 
 vars <- c("temp", "sal", "oxigeno")
 
@@ -35,31 +42,126 @@ datos_largo <- bind_rows(
 ) |>
   mutate(escala = factor(escala, levels = c("Hora", "Día")))
 
-sd <- SharedData$new(datos_largo, group = "sensores")
+# Dos grupos independientes: uno para ver un sector y otro para comparar sectores
+sd_sector <- SharedData$new(datos_largo, group = "por_sector")
+sd_var    <- SharedData$new(datos_largo, group = "por_variable")
 
 # Último registro de cada sector (para la barra lateral)
 ultimos <- datos |>
   group_by(Sector) |>
   summarise(ultimo = max(fecha), .groups = "drop")
 
-# Gráfico de una variable, una línea por sector (todas las pestañas usan la misma función)
+# Estilo común de los gráficos
+azul       <- "#0e3b52"
+cuadricula <- "#e6eef2"
+fuente     <- list(family = "Segoe UI, system-ui, sans-serif", color = azul, size = 13)
+
+# Paleta Okabe-Ito (apta para daltonismo): un color por sector
+paleta_sectores <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7",
+                     "#E69F00", "#56B4E9", "#F0E442", "#000000")
+
+# Un color fijo por variable (página "Por sector")
+color_var <- c(oxigeno = "#009E73", temp = "#D55E00", sal = "#0072B2")
+
+# Gráfico de una variable, una línea por sector
 graficar <- function(var, unidad) {
-  plot_ly(sd, x = ~ fecha, y = as.formula(paste("~", var)), color = ~ Sector,
-          text = ~ fecha_txt, type = "scatter", mode = "lines", line = list(width = 1.5),
-          hovertemplate = paste0("%{text}<br>%{y:.2f} ", unidad)) |>
-    layout(xaxis = list(title = ""),
-           yaxis = list(title = unidad, fixedrange = TRUE),
+  # Un color fijo para cada sector (mismo color en todas las pestañas)
+  sec <- sort(unique(datos$Sector))
+  plot_ly(sd_var, x = ~ fecha, y = as.formula(paste("~", var)), color = ~ Sector,
+          colors = setNames(paleta_sectores[seq_along(sec)], sec),
+          type = "scatter", mode = "lines",
+          line = list(width = 2),
+          hovertemplate = paste0("%{y:.2f} ", unidad)) |>
+    layout(font = fuente, paper_bgcolor = "#fff", plot_bgcolor = "#fff",
+           separators = ",.", hovermode = "x unified",
+           xaxis = list(title = "", gridcolor = cuadricula,
+                        hoverformat = "%d-%m-%Y %H:%M"),
+           yaxis = list(title = unidad, fixedrange = TRUE,
+                        gridcolor = cuadricula, zeroline = FALSE),
            legend = list(orientation = "h", x = 0, y = 1.1))
 }
+
+# Un panel de la página "Por sector"
+panel <- function(var, unidad, titulo) {
+  plot_ly(sd_sector, x = ~ fecha, y = as.formula(paste("~", var)),
+          type = "scatter", mode = "lines",
+          line = list(width = 2, color = color_var[[var]]),
+          name = titulo,
+          hovertemplate = paste0("%{y:.2f} ", unidad, "<extra>", titulo, "</extra>")) |>
+    layout(yaxis = list(title = unidad, fixedrange = TRUE,
+                        gridcolor = cuadricula, zeroline = FALSE),
+           annotations = list(text = paste0("<b>", titulo, "</b>"), showarrow = FALSE,
+                              x = 0, y = 1, xref = "paper", yref = "paper",
+                              xanchor = "left", yanchor = "bottom",
+                              font = list(color = color_var[[var]], size = 13)))
+}
+
+# Mapa de sectores. modo = "sector" (elige un sector) o "variable" (marca/desmarca sectores)
+crear_mapa <- function(modo) {
+  mapa <- leaflet(sectores, height = 280, width = "100%") |>
+    # Mapa base de Esri (no requiere clave); alternativa: addTiles() para OpenStreetMap
+    addProviderTiles(providers$Esri.OceanBasemap) |>
+    addCircleMarkers(
+      lng = ~ lon, lat = ~ lat, layerId = ~ Sector,
+      radius = 8, weight = 2, color = azul, opacity = 1,
+      fillColor = ~ ifelse(con_datos, "#0072B2", "#b0bec5"), fillOpacity = 0.9,
+      label = ~ paste0(Sector, " · Profundidad ", prof_txt),
+      popup = ~ paste0("<b>", Sector, "</b><br>",
+                       "Profundidad: ", prof_txt, "<br>",
+                       "Instalado: ", format(fecha_instalacion, "%d-%m-%Y"),
+                       ifelse(conductividad == "no",
+                              "<br><i>Sin sensor de conductividad</i>", ""),
+                       ifelse(con_datos, "", "<br><i>Sin datos aún</i>"))) |>
+    addLegend("bottomright", colors = c("#0072B2", "#b0bec5"),
+              labels = c("Con datos", "Sin datos aún"), opacity = 0.9)
+
+  # Conectar los puntos del mapa con los filtros de la barra lateral
+  onRender(mapa, "
+    function(el, x, data) {
+      try {
+      var map = this;
+      window.marcadores = window.marcadores || {};
+      window.marcadores[data.modo] = {};
+      data.ids.forEach(function (id) {
+        var m = map.layerManager.getLayer('marker', id);
+        if (!m) return;
+        window.marcadores[data.modo][id] = m;
+        m.on('click', function () {
+          if (data.modo === 'sector') window.seleccionarSector(id);
+          else window.alternarSector(id);
+        });
+      });
+      if (data.modo === 'sector' && window.sectorActual) window.resaltarSector(window.sectorActual);
+      if (data.modo === 'variable') window.resaltarVariable();
+      // Redibujar el mapa al cambiar de página (si no, puede quedar gris)
+      document.addEventListener('shown.bs.tab', function () { map.invalidateSize(); });
+      window.addEventListener('resize', function () { map.invalidateSize(); });
+      } catch (e) { console.log('Mapa:', e); }
+    }", data = list(ids = as.list(sectores$Sector), modo = modo))
+}
+
+# Información de cada sector para el recuadro de la barra lateral (se usa en JavaScript)
+info_json <- sectores |>
+  transmute(Sector, prof_txt, conductividad, con_datos,
+            instalacion = format(fecha_instalacion, "%d-%m-%Y")) |>
+  toJSON()
 ```
 
-# {.sidebar}
+# Por sector
+
+## {.sidebar}
 
 **Filtros**
 
 ```{r}
-filter_select("f_escala", "Promedio", sd, ~ escala, multiple = FALSE)
-filter_checkbox("f_sector", "Sector", sd, ~ Sector)
+filter_select("f_escala2", "Promedio", sd_sector, ~ escala, multiple = FALSE)
+filter_select("f_sector2", "Sector", sd_sector, ~ Sector, multiple = FALSE)
+```
+
+También puede elegir el sector haciendo clic en el mapa.
+
+```{=html}
+<div id="info-sector" style="margin-top: 0.5rem;"></div>
 ```
 
 **Último registro**
@@ -70,12 +172,25 @@ cat(paste0("- ", ultimos$Sector, ": ", format(ultimos$ultimo, "%d-%m-%Y %H:%M"),
            collapse = "\n"))
 ```
 
+```{r}
+crear_mapa("sector")
+```
+
+```{r}
+#| output: asis
+cat("<script>window.infoSectores = ", info_json, ";</script>")
+```
+
 ```{=html}
 <script>
-  document.addEventListener("DOMContentLoaded", function () {
-    // Esperar a que el menú "Promedio" esté listo
+  var estiloNormal  = { radius: 8,  weight: 2, color: "#0e3b52" };
+  var estiloElegido = { radius: 12, weight: 4, color: "#f0a202" };
+
+  // Ajusta los menús de selección: quita "(All)", deja un valor por defecto
+  // y, si se indica, ejecuta una función cada vez que cambia la selección
+  function configurarMenu(id, porDefecto, alCambiar) {
     var intento = setInterval(function () {
-      var sel = document.querySelector("#f_escala select");
+      var sel = document.querySelector("#" + id + " select");
       if (!sel || !sel.selectize) return;
       clearInterval(intento);
       var s = sel.selectize;
@@ -86,33 +201,128 @@ cat(paste0("- ", ultimos$Sector, ": ", format(ultimos$ultimo, "%d-%m-%Y %H:%M"),
         if (k === "" || texto === "(All)") s.removeOption(k);
       });
 
-      // 2. Mostrar "Día" por defecto
-      s.setValue("Día", false);
+      // 2. Valor por defecto (si no se indica, el primero de la lista)
+      var valor = porDefecto || Object.keys(s.options)[0];
+      s.setValue(valor, false);
+      if (alCambiar) alCambiar(valor);
 
-      // 3. Si alguien borra la selección, volver a "Día"
+      // 3. Si alguien borra la selección, volver al valor por defecto
       s.on("change", function (v) {
-        if (!v) s.setValue("Día", false);
+        if (!v) { s.setValue(valor, false); return; }
+        if (alCambiar) alCambiar(v);
       });
     }, 100);
+  }
+
+  // --- Página "Por sector": un sector a la vez -----------------------------
+  window.resaltarSector = function (id) {
+    window.sectorActual = id;
+    var ms = (window.marcadores || {}).sector || {};
+    Object.keys(ms).forEach(function (k) {
+      ms[k].setStyle(k === id ? estiloElegido : estiloNormal);
+    });
+    var info = (window.infoSectores || []).find(function (s) { return s.Sector === id; });
+    var div = document.getElementById("info-sector");
+    if (div && info) {
+      div.innerHTML = "<b>" + info.Sector + "</b><br>" +
+        "Profundidad: " + info.prof_txt + "<br>" +
+        "Instalado: " + info.instalacion +
+        (info.conductividad === "no"
+          ? "<br><i>Sin sensor de conductividad: no hay datos de salinidad.</i>" : "");
+    }
+  };
+
+  window.seleccionarSector = function (id) {
+    var sel = document.querySelector("#f_sector2 select");
+    if (sel && sel.selectize && sel.selectize.options[id]) sel.selectize.setValue(id);
+  };
+
+  // --- Página "Por variable": varios sectores a la vez ---------------------
+  function casillas() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll("#f_sector input[type=checkbox]"));
+  }
+
+  // Marca en el mapa los sectores con la casilla activada
+  window.resaltarVariable = function () {
+    var ms = (window.marcadores || {}).variable || {};
+    var marcados = casillas().filter(function (c) { return c.checked; })
+                             .map(function (c) { return c.value; });
+    Object.keys(ms).forEach(function (k) {
+      ms[k].setStyle(marcados.indexOf(k) >= 0 ? estiloElegido : estiloNormal);
+    });
+  };
+
+  // Clic en el mapa: activa o desactiva la casilla de ese sector (si tiene datos)
+  window.alternarSector = function (id) {
+    var c = casillas().find(function (c) { return c.value === id; });
+    if (c) c.click();
+  };
+
+  document.addEventListener("DOMContentLoaded", function () {
+    configurarMenu("f_escala2", "Día");
+    configurarMenu("f_sector2", null, window.resaltarSector);
+    configurarMenu("f_escala",  "Día");
+    document.addEventListener("change", function (e) {
+      if (e.target.closest && e.target.closest("#f_sector")) window.resaltarVariable();
+    });
   });
 </script>
 ```
 
-# Oxígeno
+## Row
+
+```{r}
+#| title: "Oxígeno, temperatura y salinidad"
+subplot(panel("oxigeno", "mg/L", "Oxígeno"),
+        panel("temp",    "°C",   "Temperatura"),
+        panel("sal",     "PSU",  "Salinidad"),
+        nrows = 3, shareX = TRUE, titleY = TRUE, margin = c(0, 0, 0.06, 0.04)) |>
+  layout(font = fuente, paper_bgcolor = "#fff", plot_bgcolor = "#fff",
+         separators = ",.", showlegend = FALSE, hovermode = "x",
+         # Línea vertical que cruza los tres paneles en la misma fecha
+         xaxis = list(title = "", gridcolor = cuadricula,
+                      hoverformat = "%d-%m-%Y %H:%M",
+                      showspikes = TRUE, spikemode = "across", spikesnap = "cursor",
+                      spikethickness = 1, spikedash = "dot", spikecolor = "#4d6673"))
+```
+
+# Por variable
+
+## {.sidebar}
+
+**Filtros**
+
+```{r}
+filter_select("f_escala", "Promedio", sd_var, ~ escala, multiple = FALSE)
+filter_checkbox("f_sector", "Sector", sd_var, ~ Sector)
+```
+
+También puede marcar o desmarcar sectores haciendo clic en el mapa.
+
+**Último registro**
+
+```{r}
+#| output: asis
+cat(paste0("- ", ultimos$Sector, ": ", format(ultimos$ultimo, "%d-%m-%Y %H:%M"),
+           collapse = "\n"))
+```
+
+```{r}
+crear_mapa("variable")
+```
+
+## Row {.tabset}
 
 ```{r}
 #| title: "Oxígeno disuelto (mg/L)"
 graficar("oxigeno", "mg/L")
 ```
 
-# Temperatura
-
 ```{r}
 #| title: "Temperatura (°C)"
 graficar("temp", "°C")
 ```
-
-# Salinidad
 
 ```{r}
 #| title: "Salinidad (PSU)"
