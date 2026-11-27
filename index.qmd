@@ -2,7 +2,7 @@
 title: "Monitoreo ambiental"
 format:
   dashboard:
-    embed-resources: true
+    embed-resources: false
     theme: [cosmo, estilo.scss]
     include-in-header:
       text: |
