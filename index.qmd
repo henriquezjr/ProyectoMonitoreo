@@ -56,6 +56,21 @@ azul       <- "#0e3b52"
 cuadricula <- "#e6eef2"
 fuente     <- list(family = "Segoe UI, system-ui, sans-serif", color = azul, size = 13)
 
+# Líneas de los ejes (eje con línea y marcas hacia afuera)
+# mirror = TRUE repite la línea arriba y a la derecha: el gráfico queda cerrado, como box()
+ejes <- list(showline = TRUE, mirror = TRUE, linecolor = azul, linewidth = 1,
+             ticks = "outside", tickcolor = azul, ticklen = 5,
+             gridcolor = cuadricula, zeroline = FALSE)
+
+# Límites redondeados del eje Y para cada variable (calculados con pretty() sobre
+# todos los datos, así el eje termina en un valor redondo y la escala es la misma
+# para todos los sectores)
+eje_y <- function(var) {
+  p <- pretty(range(datos_largo[[var]], na.rm = TRUE), n = 4)
+  list(range = range(p), autorange = FALSE,
+       tickmode = "linear", tick0 = p[1], dtick = diff(p)[1])
+}
+
 # Paleta Okabe-Ito (apta para daltonismo): un color por sector
 paleta_sectores <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7",
                      "#E69F00", "#56B4E9", "#F0E442", "#000000")
@@ -64,7 +79,7 @@ paleta_sectores <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7",
 color_var <- c(oxigeno = "#009E73", temp = "#D55E00", sal = "#0072B2")
 
 # Gráfico de una variable, una línea por sector
-graficar <- function(var, unidad) {
+graficar <- function(var, unidad, titulo) {
   # Un color fijo para cada sector (mismo color en todas las pestañas)
   sec <- sort(unique(datos$Sector))
   plot_ly(sd_var, x = ~ fecha, y = as.formula(paste("~", var)), color = ~ Sector,
@@ -74,11 +89,12 @@ graficar <- function(var, unidad) {
           hovertemplate = paste0("%{y:.2f} ", unidad)) |>
     layout(font = fuente, paper_bgcolor = "#fff", plot_bgcolor = "#fff",
            separators = ",.", hovermode = "x unified",
-           xaxis = list(title = "", gridcolor = cuadricula,
-                        hoverformat = "%d-%m-%Y %H:%M"),
-           yaxis = list(title = unidad, fixedrange = TRUE,
-                        gridcolor = cuadricula, zeroline = FALSE),
-           legend = list(orientation = "h", x = 0, y = 1.1))
+           xaxis = c(ejes, list(title = "", hoverformat = "%d-%m-%Y %H:%M")),
+           yaxis = c(ejes, eje_y(var), list(title = paste0(titulo, " (", unidad, ")"),
+                                fixedrange = TRUE)),
+           legend = list(orientation = "h", x = 0, y = 1.1)) |>
+    # Sin resaltado al hacer clic (si no, las líneas quedan atenuadas al tocarlas)
+    highlight(on = NULL, off = NULL)
 }
 
 # Un panel de la página "Por sector"
@@ -88,12 +104,9 @@ panel <- function(var, unidad, titulo) {
           line = list(width = 2, color = color_var[[var]]),
           name = titulo,
           hovertemplate = paste0("%{y:.2f} ", unidad, "<extra>", titulo, "</extra>")) |>
-    layout(yaxis = list(title = unidad, fixedrange = TRUE,
-                        gridcolor = cuadricula, zeroline = FALSE),
-           annotations = list(text = paste0("<b>", titulo, "</b>"), showarrow = FALSE,
-                              x = 0, y = 1, xref = "paper", yref = "paper",
-                              xanchor = "left", yanchor = "bottom",
-                              font = list(color = color_var[[var]], size = 13)))
+    layout(yaxis = c(ejes, eje_y(var), list(title = list(text = paste0(titulo, " (", unidad, ")"),
+                                             font = list(size = 12)),
+                                fixedrange = TRUE)))
 }
 
 # Mapa de sectores. modo = "sector" (elige un sector) o "variable" (marca/desmarca sectores)
@@ -122,19 +135,26 @@ crear_mapa <- function(modo) {
       var map = this;
       window.marcadores = window.marcadores || {};
       window.marcadores[data.modo] = {};
-      data.ids.forEach(function (id) {
-        var m = map.layerManager.getLayer('marker', id);
-        if (!m) return;
-        window.marcadores[data.modo][id] = m;
-        m.on('click', function () {
-          if (data.modo === 'sector') window.seleccionarSector(id);
-          else window.alternarSector(id);
+      // Registrar los puntos. Se repite cuando se agregan capas, porque en una
+      // página oculta los puntos pueden aparecer después de este código.
+      function registrar() {
+        data.ids.forEach(function (id) {
+          var m = map.layerManager.getLayer('marker', id);
+          if (!m || m._registrado) return;
+          m._registrado = true;
+          window.marcadores[data.modo][id] = m;
+          m.on('click', function () {
+            if (data.modo === 'sector') window.seleccionarSector(id);
+            else window.alternarSector(id);
+          });
         });
-      });
-      if (data.modo === 'sector' && window.sectorActual) window.resaltarSector(window.sectorActual);
-      if (data.modo === 'variable') window.resaltarVariable();
+        if (data.modo === 'sector' && window.sectorActual) window.resaltarSector(window.sectorActual);
+        if (data.modo === 'variable') window.resaltarVariable();
+      }
+      registrar();
+      map.on('layeradd', registrar);
       // Redibujar el mapa al cambiar de página (si no, puede quedar gris)
-      document.addEventListener('shown.bs.tab', function () { map.invalidateSize(); });
+      document.addEventListener('shown.bs.tab', function () { map.invalidateSize(); registrar(); });
       window.addEventListener('resize', function () { map.invalidateSize(); });
       } catch (e) { console.log('Mapa:', e); }
     }", data = list(ids = as.list(sectores$Sector), modo = modo))
@@ -260,9 +280,19 @@ cat("<script>window.infoSectores = ", info_json, ";</script>")
   };
 
   document.addEventListener("DOMContentLoaded", function () {
-    configurarMenu("f_escala2", "Día");
+    // En el teléfono: dejar la barra lateral siempre abierta (arriba de los gráficos)
+    // y mostrar las páginas en la barra superior en vez del menú ☰
+    if (window.innerWidth < 768) {
+      document.querySelectorAll(".bslib-sidebar-layout").forEach(function (l) {
+        l.setAttribute("data-bslib-sidebar-open", "always");
+        l.classList.remove("sidebar-collapsed");
+      });
+      var nav = document.querySelector("nav.navbar");
+      if (nav) { nav.classList.remove("navbar-expand-md"); nav.classList.add("navbar-expand"); }
+    }
+    configurarMenu("f_escala2", "Hora");
     configurarMenu("f_sector2", null, window.resaltarSector);
-    configurarMenu("f_escala",  "Día");
+    configurarMenu("f_escala",  "Hora");
     document.addEventListener("change", function (e) {
       if (e.target.closest && e.target.closest("#f_sector")) window.resaltarVariable();
     });
@@ -274,17 +304,22 @@ cat("<script>window.infoSectores = ", info_json, ";</script>")
 
 ```{r}
 #| title: "Oxígeno, temperatura y salinidad"
+# Eje X con línea y fechas en cada panel; los tres paneles se mueven juntos al hacer zoom
+eje_x <- c(ejes, list(title = "", hoverformat = "%d-%m-%Y %H:%M", tickformat = "%d-%m",
+                      showspikes = TRUE, spikemode = "across", spikesnap = "cursor",
+                      spikethickness = 1, spikedash = "dot", spikecolor = "#4d6673"))
+
 subplot(panel("oxigeno", "mg/L", "Oxígeno"),
         panel("temp",    "°C",   "Temperatura"),
         panel("sal",     "PSU",  "Salinidad"),
-        nrows = 3, shareX = TRUE, titleY = TRUE, margin = c(0, 0, 0.06, 0.04)) |>
+        nrows = 3, shareX = FALSE, titleY = TRUE, margin = c(0, 0, 0.04, 0.07)) |>
   layout(font = fuente, paper_bgcolor = "#fff", plot_bgcolor = "#fff",
          separators = ",.", showlegend = FALSE, hovermode = "x",
-         # Línea vertical que cruza los tres paneles en la misma fecha
-         xaxis = list(title = "", gridcolor = cuadricula,
-                      hoverformat = "%d-%m-%Y %H:%M",
-                      showspikes = TRUE, spikemode = "across", spikesnap = "cursor",
-                      spikethickness = 1, spikedash = "dot", spikecolor = "#4d6673"))
+         xaxis  = eje_x,
+         xaxis2 = c(eje_x, list(matches = "x")),
+         xaxis3 = c(eje_x, list(matches = "x"))) |>
+  # Sin resaltado al hacer clic (si no, las líneas quedan atenuadas al tocarlas)
+  highlight(on = NULL, off = NULL)
 ```
 
 # Por variable
@@ -316,15 +351,15 @@ crear_mapa("variable")
 
 ```{r}
 #| title: "Oxígeno disuelto (mg/L)"
-graficar("oxigeno", "mg/L")
+graficar("oxigeno", "mg/L", "Oxígeno disuelto")
 ```
 
 ```{r}
 #| title: "Temperatura (°C)"
-graficar("temp", "°C")
+graficar("temp", "°C", "Temperatura")
 ```
 
 ```{r}
 #| title: "Salinidad (PSU)"
-graficar("sal", "PSU")
+graficar("sal", "PSU", "Salinidad")
 ```

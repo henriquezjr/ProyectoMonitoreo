@@ -26,3 +26,29 @@ $font-family-sans-serif: "Segoe UI", system-ui, sans-serif;
 .sidebar {
   color: #4d6673;
 }
+
+// --- Teléfono: barra lateral arriba (filtros y mapa) y gráficos abajo -------
+@media (max-width: 767.98px) {
+  .navbar-title { font-size: 1.1rem; }
+  .navbar .nav-link { font-size: 0.95rem; padding: 0.4rem 0.6rem; }
+  // Ocultar la barra de herramientas de plotly (tapa los títulos)
+  .modebar-container { display: none !important; }
+  html body .bslib-sidebar-layout.bslib-sidebar-layout.html-fill-container {
+    display: flex !important;
+    flex-direction: column !important;
+  }
+  html body .bslib-sidebar-layout.bslib-sidebar-layout > .sidebar {
+    order: -1 !important;
+    flex: none !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  html body .bslib-sidebar-layout.bslib-sidebar-layout > .main {
+    flex: none !important;
+    height: 620px !important;
+    min-height: 620px !important;
+  }
+  html body .bslib-sidebar-layout.bslib-sidebar-layout > .collapse-toggle {
+    display: none !important;
+  }
+}
