@@ -1,4 +1,6 @@
 /*-- scss:defaults --*/
+// No descargar la letra Source Sans Pro del tema cosmo (no se usa y pesa 4 MB)
+$web-font-path: false;
 // Colores y letra tomados de la página de Valentina
 $body-bg: #f1f6f8;
 $body-color: #0e3b52;

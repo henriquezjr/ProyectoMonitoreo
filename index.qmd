@@ -56,6 +56,19 @@ azul       <- "#0e3b52"
 cuadricula <- "#e6eef2"
 fuente     <- list(family = "Segoe UI, system-ui, sans-serif", color = azul, size = 13)
 
+# Versión liviana de plotly (solo gráficos x-y): 1,3 MB en vez de 3,6 MB.
+# Usa el archivo libs/plotly-cartesian.min.js del proyecto.
+liviano <- function(p) {
+  p <- plotly_build(p)
+  i <- which(vapply(p$dependencies, `[[`, "", "name") == "plotly-main")
+  if (length(i) == 1) {
+    p$dependencies[[i]] <- htmltools::htmlDependency(
+      "plotly-cartesian", "2.25.2", src = c(file = normalizePath("libs")),
+      script = "plotly-cartesian.min.js", all_files = FALSE)
+  }
+  p
+}
+
 # Líneas de los ejes (eje con línea y marcas hacia afuera)
 # mirror = TRUE repite la línea arriba y a la derecha: el gráfico queda cerrado, como box()
 ejes <- list(showline = TRUE, mirror = TRUE, linecolor = azul, linewidth = 1,
@@ -89,12 +102,14 @@ graficar <- function(var, unidad, titulo) {
           hovertemplate = paste0("%{y:.2f} ", unidad)) |>
     layout(font = fuente, paper_bgcolor = "#fff", plot_bgcolor = "#fff",
            separators = ",.", hovermode = "x unified",
-           xaxis = c(ejes, list(title = "", hoverformat = "%d-%m-%Y %H:%M")),
+           xaxis = c(ejes, list(title = "", hoverformat = "%d-%m-%Y %H:%M",
+                                tickformat = "%d-%m")),
            yaxis = c(ejes, eje_y(var), list(title = paste0(titulo, " (", unidad, ")"),
                                 fixedrange = TRUE)),
            legend = list(orientation = "h", x = 0, y = 1.1)) |>
     # Sin resaltado al hacer clic (si no, las líneas quedan atenuadas al tocarlas)
-    highlight(on = NULL, off = NULL)
+    highlight(on = NULL, off = NULL) |>
+    liviano()
 }
 
 # Un panel de la página "Por sector"
@@ -319,7 +334,8 @@ subplot(panel("oxigeno", "mg/L", "Oxígeno"),
          xaxis2 = c(eje_x, list(matches = "x")),
          xaxis3 = c(eje_x, list(matches = "x"))) |>
   # Sin resaltado al hacer clic (si no, las líneas quedan atenuadas al tocarlas)
-  highlight(on = NULL, off = NULL)
+  highlight(on = NULL, off = NULL) |>
+  liviano()
 ```
 
 # Por variable
